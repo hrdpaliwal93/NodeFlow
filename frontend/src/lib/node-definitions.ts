@@ -197,6 +197,31 @@ export const configSchema: Record<string, Record<string, ConfigFieldSchema>> = {
             defaultValue: "",
         },
     },
+    "Web Search": {
+        query: {
+            type: "input",
+            placeholder: "Search topic or query (supports {{prev}})",
+            defaultValue: "",
+        },
+        apiKey: {
+            type: "input",
+            placeholder: "Tavily API key (tvly-...) — leave blank if set in backend .env",
+            defaultValue: "",
+        },
+        searchDepth: {
+            type: "select",
+            defaultValue: "basic",
+            options: [
+                { value: "basic", label: "Basic Search (Faster)" },
+                { value: "advanced", label: "Advanced Search (Deeper)" },
+            ],
+        },
+        maxResults: {
+            type: "input",
+            placeholder: "5",
+            defaultValue: "5",
+        },
+    },
     "If / Else": {
         field: {
             type: "input",
@@ -315,6 +340,163 @@ export const configSchema: Record<string, Record<string, ConfigFieldSchema>> = {
             type: "input",
             placeholder: "Match value for Case 3",
             defaultValue: "",
+        },
+    },
+    "Schedule Trigger": {
+        expression: {
+            type: "input",
+            placeholder: "0 * * * * (e.g. hourly: 0 * * * *, every 15m: */15 * * * *)",
+            defaultValue: "0 * * * *",
+        },
+        enabled: {
+            type: "select",
+            defaultValue: "true",
+            options: [
+                { value: "true", label: "Enabled (Active Schedule)" },
+                { value: "false", label: "Disabled (Paused)" },
+            ],
+        },
+        description: {
+            type: "input",
+            placeholder: "Optional note (e.g. Run every morning at 9 AM)",
+            defaultValue: "",
+        },
+    },
+    "Telegram Bot": {
+        botToken: {
+            type: "input",
+            placeholder: "123456:ABC-DEF... (or leave blank if set in backend .env)",
+            defaultValue: "",
+        },
+        chatId: {
+            type: "input",
+            placeholder: "@channel_name or numeric chat ID (supports {{prev}})",
+            defaultValue: "",
+        },
+        message: {
+            type: "textarea",
+            placeholder: "Message text or {{prev.display}} (supports {{prev}})",
+            defaultValue: "",
+        },
+        parseMode: {
+            type: "select",
+            defaultValue: "Markdown",
+            options: [
+                { value: "Markdown", label: "Markdown" },
+                { value: "HTML", label: "HTML" },
+                { value: "None", label: "Plain Text (None)" },
+            ],
+        },
+    },
+    "Notion": {
+        apiKey: {
+            type: "input",
+            placeholder: "secret_... or ntn_... Notion API key (or set in backend .env)",
+            defaultValue: "",
+        },
+        targetType: {
+            type: "select",
+            defaultValue: "database",
+            options: [
+                { value: "database", label: "Database Item (database_id)" },
+                { value: "page", label: "Subpage under Page (page_id)" },
+            ],
+        },
+        databaseId: {
+            type: "input",
+            placeholder: "Database ID or Page ID (or paste Notion URL)",
+            defaultValue: "",
+        },
+        title: {
+            type: "input",
+            placeholder: "Page title (supports {{prev}})",
+            defaultValue: "Workflow Result",
+        },
+        content: {
+            type: "textarea",
+            placeholder: "Body text / paragraph blocks (supports {{prev}})",
+            defaultValue: "",
+        },
+    },
+    "AI Extractor": {
+        provider: {
+            type: "select",
+            defaultValue: "gemini",
+            options: [
+                { value: "gemini", label: "Google Gemini" },
+                { value: "groq", label: "Groq" },
+            ],
+        },
+        apikey: {
+            type: "input",
+            placeholder: "Gemini or Groq API key",
+            defaultValue: "",
+        },
+        model: {
+            type: "input",
+            placeholder: "gemini-2.5-flash or llama-3.3-70b-versatile",
+            defaultValue: "gemini-2.5-flash",
+        },
+        fields: {
+            type: "textarea",
+            placeholder: "Fields to extract: e.g. title, summary, keyPoints (array), sentiment",
+            defaultValue: "title, summary, keyPoints, sentiment",
+        },
+        text: {
+            type: "textarea",
+            placeholder: "Input text or {{prev.display}} (leave blank to use previous output)",
+            defaultValue: "",
+        },
+    },
+    "Data Extractor": {
+        extractType: {
+            type: "select",
+            defaultValue: "urls",
+            options: [
+                { value: "urls", label: "Web URLs (http/https)" },
+                { value: "emails", label: "Email Addresses" },
+                { value: "numbers", label: "Numbers & Quantities" },
+                { value: "phones", label: "Phone Numbers" },
+                { value: "regex", label: "Custom Regex Pattern" },
+            ],
+        },
+        pattern: {
+            type: "input",
+            placeholder: "e.g. \\b[A-Z]{3,}\\b (only used when Regex is selected)",
+            defaultValue: "",
+        },
+        flags: {
+            type: "input",
+            placeholder: "g, i, m (default: g)",
+            defaultValue: "g",
+        },
+        input: {
+            type: "textarea",
+            placeholder: "Source text (leave blank to extract from previous node output)",
+            defaultValue: "",
+        },
+    },
+    "Code Runner": {
+        code: {
+            type: "textarea",
+            placeholder: "// Access 'input' (previous node output)\nreturn {\n  timestamp: new Date().toISOString(),\n  data: input\n};",
+            defaultValue: "return {\n  timestamp: new Date().toISOString(),\n  data: input\n};",
+        },
+    },
+    "Delay": {
+        duration: {
+            type: "input",
+            placeholder: "e.g. 5",
+            defaultValue: "5",
+        },
+        unit: {
+            type: "select",
+            defaultValue: "seconds",
+            options: [
+                { value: "seconds", label: "Seconds" },
+                { value: "milliseconds", label: "Milliseconds" },
+                { value: "minutes", label: "Minutes" },
+            ],
         },
     },
 };

@@ -7,6 +7,7 @@ import mongoose from 'mongoose'
 import { userModel, nodeModel , workflowModel} from './db.js'
 import Auth from './auth.js'
 import { executeWorkflow, type ExecutionProgressEvent, type WorkflowEdge, type WorkflowNode } from './executor.js'
+import { syncSingleWorkflow, syncWorkflowCronJobs } from './scheduler.js'
 const app = express()
 
 const allowedOrigins = (process.env.FRONTEND_URL ?? '')
@@ -94,22 +95,90 @@ app.get('/nodes', async (req,res)=>{
             res.json({message:"error in getting all nodes", success:false})
             return
         }
-        // Only expose a single Manual Trigger for trigger nodes
-        let seenManualTrigger = false
+
+        // Allow Manual Trigger and Schedule Trigger as triggers
+        const seenTriggers = new Set<string>()
         const filteredNodes = nodes.filter((n) => {
             if (n.type !== "trigger") return true
-            if (!/manual/i.test(n.label ?? "") || seenManualTrigger) return false
-            seenManualTrigger = true
+            const key = /schedule|cron/i.test(n.label ?? '') ? 'schedule' : 'manual'
+            if (seenTriggers.has(key)) return false
+            seenTriggers.add(key)
             return true
         })
+
+        if (!filteredNodes.some((n) => n.type === 'trigger' && /schedule|cron/i.test(n.label ?? ''))) {
+            filteredNodes.push({
+                _id: "builtin-schedule-trigger",
+                type: "trigger",
+                label: "Schedule Trigger",
+                description: "Starts workflow automatically at a specified date and time or recurring interval.",
+            } as any)
+        }
         if (!filteredNodes.some((n) => n.label === "Display Output")) {
             filteredNodes.push({
                 _id: "builtin-display-output",
                 type: "action",
                 label: "Display Output",
-                description: "Displays a configured value/template or the previous node's output directly on the node.",
+                description: "Displays formatted text or previous node output directly on the canvas.",
             } as any)
         }
+        if (!filteredNodes.some((n) => n.label === "Web Search")) {
+            filteredNodes.push({
+                _id: "builtin-web-search",
+                type: "action",
+                label: "Web Search",
+                description: "Searches the web using Tavily API to fetch relevant sources and content.",
+            } as any)
+        }
+        if (!filteredNodes.some((n) => n.label === "Telegram Bot")) {
+            filteredNodes.push({
+                _id: "builtin-telegram-bot",
+                type: "action",
+                label: "Telegram Bot",
+                description: "Sends message notifications or alerts to a specified Telegram chat or channel.",
+            } as any)
+        }
+        if (!filteredNodes.some((n) => n.label === "Notion")) {
+            filteredNodes.push({
+                _id: "builtin-notion",
+                type: "action",
+                label: "Notion",
+                description: "Creates pages or database records inside Notion.",
+            } as any)
+        }
+        if (!filteredNodes.some((n) => n.label === "AI Extractor")) {
+            filteredNodes.push({
+                _id: "builtin-ai-extractor",
+                type: "action",
+                label: "AI Extractor",
+                description: "Extracts structured JSON fields from text using an AI model.",
+            } as any)
+        }
+        if (!filteredNodes.some((n) => n.label === "Data Extractor")) {
+            filteredNodes.push({
+                _id: "builtin-data-extractor",
+                type: "action",
+                label: "Data Extractor",
+                description: "Extracts URLs, email addresses, phone numbers, or custom regex matches from text.",
+            } as any)
+        }
+        if (!filteredNodes.some((n) => n.label === "Code Runner")) {
+            filteredNodes.push({
+                _id: "builtin-code-runner",
+                type: "action",
+                label: "Code Runner",
+                description: "Executes custom sandboxed JavaScript code to process and transform data.",
+            } as any)
+        }
+        if (!filteredNodes.some((n) => n.label === "Delay")) {
+            filteredNodes.push({
+                _id: "builtin-delay",
+                type: "action",
+                label: "Delay",
+                description: "Pauses workflow execution for a specified duration.",
+            } as any)
+        }
+
         res.json({message:"all nodes", success:true, nodelist:filteredNodes})
     }catch(e:any){
         console.error(e.message)
@@ -163,6 +232,7 @@ app.post('/workflows', Auth, async (req,res)=>{
             nodes: workflow.nodes ?? [],
             edges: workflow.edges ?? []
         })
+        syncSingleWorkflow(w._id.toString()).catch(() => {})
         res.json({message:"workflow saved !", success:true, workflow:w})
 
     }catch(e:any){
@@ -193,6 +263,7 @@ app.put('/workflows/:id', Auth, async (req,res)=>{
             res.status(404).json({message:"workflow not found or unauthorized", success:false})
             return
         }
+        syncSingleWorkflow(workflowId).catch(() => {})
         res.json({message:"workflow updated !", success:true, workflow:updated})
     }catch(e:any){
         console.error(e.message)
@@ -213,6 +284,7 @@ app.delete('/workflows/:id', Auth, async (req,res)=>{
             res.status(404).json({message:"workflow not found or unauthorized", success:false})
             return
         }
+        syncSingleWorkflow(workflowId).catch(() => {})
         res.json({message:"workflow deleted !", success:true})
     }catch(e:any){
         console.error(e.message)
@@ -299,4 +371,7 @@ app.post('/workflows/:id/execute', Auth, async (req,res)=>{
 const PORT = Number(process.env.PORT) || 8000
 app.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`)
+    syncWorkflowCronJobs().catch((err) => {
+        console.error('Failed to initialize workflow cron jobs:', err)
+    })
 })

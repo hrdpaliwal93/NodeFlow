@@ -110,7 +110,7 @@ export const useWorkflowstore = create<WorkflowState>()(
           set({
             statusMessage: {
               type: "error",
-              text: "Only one Manual Trigger node is allowed per workflow.",
+              text: "Only one trigger node is allowed per workflow.",
             },
           })
           return
@@ -238,7 +238,7 @@ export const useWorkflowstore = create<WorkflowState>()(
           set({
             statusMessage: {
               type: "error",
-              text: "Every workflow must have a Manual Trigger node.",
+              text: "Every workflow must have a Trigger node (Manual or Schedule).",
             },
           })
           return null
@@ -248,13 +248,13 @@ export const useWorkflowstore = create<WorkflowState>()(
           set({
             statusMessage: {
               type: "error",
-              text: "Connect Manual Trigger to at least one node with an edge before running.",
+              text: "Connect the Trigger node to at least one node with an edge before running.",
             },
           })
           return null
         }
 
-        // Mark nodes reachable from Manual Trigger as pending; disconnected nodes stay idle
+        // Mark nodes reachable from Trigger as pending; disconnected nodes stay idle
         const outgoing = new Map<string, string[]>()
         for (const edge of edges) {
           const list = outgoing.get(edge.source) ?? []
@@ -277,7 +277,7 @@ export const useWorkflowstore = create<WorkflowState>()(
           set({
             statusMessage: {
               type: "error",
-              text: "No nodes are connected downstream from Manual Trigger.",
+              text: "No nodes are connected downstream from the Trigger node.",
             },
           })
           return null

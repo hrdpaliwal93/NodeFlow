@@ -16,9 +16,23 @@ export default function Triggersheet() {
   const nodes = useWorkflowstore((state) => state.nodes)
 
   const hasTrigger = nodes.some((n) => n.type === "trigger")
-  const manualTrigger = nodelist.find(
-    (n: any) => n.type === "trigger" && /manual/i.test(n.label ?? "")
-  )
+  const triggernodes = nodelist.filter((n: any) => n.type === "trigger")
+  const availableTriggers =
+    triggernodes.length > 0
+      ? triggernodes
+      : [
+          {
+            _id: "default-manual",
+            label: "Manual Trigger",
+            description: "Click to manually execute the workflow.",
+          },
+          {
+            _id: "default-schedule",
+            label: "Schedule Trigger",
+            description: "Run workflow automatically on a recurring cron schedule.",
+          },
+        ]
+
   const actionnodes = nodelist.filter((n: any) => n.type === "action")
   const conditionnodes = nodelist.filter((n: any) => n.type === "condition")
 
@@ -39,31 +53,36 @@ export default function Triggersheet() {
           </SheetHeader>
 
           <SheetHeader>
-            <SheetTitle className="font-bold">Trigger</SheetTitle>
+            <SheetTitle className="font-bold">Trigger Nodes</SheetTitle>
             <SheetDescription>
-              Every workflow starts with one Manual Trigger node.
+              Every workflow starts with one Trigger node (Manual or Scheduled).
             </SheetDescription>
           </SheetHeader>
 
-          <div
-            className={`rounded-md border p-2 ${
-              hasTrigger
-                ? "cursor-not-allowed opacity-50"
-                : "cursor-pointer hover:bg-accent"
-            }`}
-            onClick={() => {
-              if (!hasTrigger) {
-                addnode("trigger", manualTrigger?.label || "Manual Trigger")
-              }
-            }}
-          >
-            <h4 className="font-medium">
-              {manualTrigger?.label || "Manual Trigger"}
-              {hasTrigger ? " (Already on canvas)" : ""}
-            </h4>
-            <p className="text-xs text-muted-foreground">
-              {manualTrigger?.description || "Click the Manual Trigger node to execute the workflow."}
-            </p>
+          <div className="space-y-2">
+            {availableTriggers.map((t: any) => (
+              <div
+                key={t._id || t.label}
+                className={`rounded-md border p-2 ${
+                  hasTrigger
+                    ? "cursor-not-allowed opacity-50"
+                    : "cursor-pointer hover:bg-accent"
+                }`}
+                onClick={() => {
+                  if (!hasTrigger) {
+                    addnode("trigger", t.label)
+                  }
+                }}
+              >
+                <h4 className="font-medium">
+                  {t.label}
+                  {hasTrigger ? " (Canvas already has trigger)" : ""}
+                </h4>
+                <p className="text-xs text-muted-foreground">
+                  {t.description || "Start workflow execution."}
+                </p>
+              </div>
+            ))}
           </div>
 
           <SheetHeader>

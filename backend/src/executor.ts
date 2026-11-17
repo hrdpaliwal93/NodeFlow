@@ -1,4 +1,5 @@
 import mongoose from 'mongoose'
+import vm from 'node:vm'
 
 export interface WorkflowNode {
     id: string;
@@ -140,6 +141,12 @@ function extractReadableText(prevOutput: unknown): string {
         const obj = prevOutput as Record<string, unknown>;
         if (typeof obj["reply"] === "string") return obj["reply"];
         if (typeof obj["text"] === "string") return obj["text"];
+        if (typeof obj["display"] === "string") return obj["display"];
+        if (Array.isArray(obj["sources"])) {
+            return (obj["sources"] as Array<{ url?: string; content?: string }>)
+                .map((s, i) => `Source ${i + 1} (${s.url}):\n${s.content}`)
+                .join("\n\n");
+        }
         if (obj["data"] !== undefined) {
             return typeof obj["data"] === "string" ? obj["data"] : JSON.stringify(obj["data"]);
         }
@@ -341,6 +348,34 @@ function evaluateConditionOperator(actual: unknown, operator: string, expectedRa
     }
 }
 
+function executeSandboxedCode(codeStr: string, input: unknown): unknown {
+    const sandbox = {
+        input,
+        JSON,
+        Math,
+        Date,
+        Array,
+        Object,
+        String,
+        Number,
+        Boolean,
+        RegExp,
+        console: {
+            log: () => {},
+            error: () => {},
+            warn: () => {},
+        },
+    };
+    const context = vm.createContext(sandbox);
+    const wrapped = `(() => {
+        ${codeStr}
+    })()`;
+    return vm.runInContext(wrapped, context, {
+        timeout: 3000,
+        displayErrors: true,
+    });
+}
+
 interface NodeExecutionOutcome {
     output: unknown;
     activeHandles?: string[];
@@ -353,9 +388,16 @@ async function executeNode(
     const label = node.data?.label ?? "";
     const config = node.data?.config ?? {};
 
-    if (node.type === "trigger" || /manual/i.test(label)) {
-        if (!/manual/i.test(label)) {
-            throw new Error(`Unsupported trigger "${label}". Only Manual Trigger is supported.`);
+    if (node.type === "trigger" || /manual|schedule|cron/i.test(label)) {
+        if (/schedule|cron/i.test(label)) {
+            return {
+                output: {
+                    trigger: "schedule",
+                    cron: config["expression"] || "0 * * * *",
+                    triggeredAt: new Date().toISOString(),
+                    input: prevOutput ?? null,
+                },
+            };
         }
         return {
             output: {
@@ -760,6 +802,414 @@ async function executeNode(
         };
     }
 
+    if (label === "Web Search" || label === "Tavily Search") {
+        const queryTemplate = (config["query"] ?? config["topic"] ?? "").trim();
+        const searchQuery = queryTemplate
+            ? interpolateTemplate(queryTemplate, prevOutput).trim()
+            : extractReadableText(prevOutput).trim();
+
+        if (!searchQuery) {
+            throw new Error("Web Search node requires a search query or topic.");
+        }
+
+        const apiKey = (config["apiKey"] ?? config["apikey"] ?? process.env["TAVILY_API_KEY"] ?? "").trim();
+        if (!apiKey) {
+            throw new Error("Tavily API key is missing. Please provide it in node settings or set TAVILY_API_KEY in backend .env.");
+        }
+
+        const searchDepth = (config["searchDepth"] ?? "basic").trim();
+        const parsedMax = Number(config["maxResults"] ?? "5");
+        const maxResults = Number.isNaN(parsedMax) || parsedMax <= 0 ? 5 : Math.min(parsedMax, 20);
+
+        const res = await fetchWithTimeout(
+            "https://api.tavily.com/search",
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    api_key: apiKey,
+                    query: searchQuery,
+                    search_depth: searchDepth,
+                    max_results: maxResults,
+                }),
+            },
+            25000
+        );
+
+        const text = await res.text();
+        if (!res.ok) {
+            throw new Error(`Tavily search failed (${res.status}): ${text}`);
+        }
+
+        const parsed = safeParseJson(text) as {
+            results?: Array<{
+                title?: string;
+                url?: string;
+                content?: string;
+                score?: number;
+            }>;
+        } | undefined;
+
+        const rawResults = parsed?.results ?? [];
+        // Extract only sources (links) and their content fetched
+        const sources = rawResults
+            .map((item) => ({
+                url: String(item.url ?? "").trim(),
+                content: String(item.content ?? "").trim(),
+            }))
+            .filter((s) => s.url || s.content);
+
+        const formattedDisplay = sources.length > 0
+            ? sources.map((s, idx) => `[Source ${idx + 1}] ${s.url}\n${s.content}`).join("\n\n")
+            : "No sources found.";
+
+        return {
+            output: {
+                query: searchQuery,
+                count: sources.length,
+                sources,
+                display: formattedDisplay,
+                text: formattedDisplay,
+            },
+        };
+    }
+
+    if (label === "Telegram Bot" || label === "Telegram") {
+        const botToken = (config["botToken"] ?? process.env["TELEGRAM_BOT_TOKEN"] ?? "").trim();
+        const chatId = interpolateTemplate(config["chatId"] ?? "", prevOutput).trim();
+        const rawMessage = config["message"] ?? "";
+        const messageText = rawMessage.trim()
+            ? interpolateTemplate(rawMessage, prevOutput)
+            : extractReadableText(prevOutput);
+        const parseMode = (config["parseMode"] ?? "Markdown").trim();
+
+        if (!botToken) {
+            throw new Error("Telegram Bot node requires a Bot Token (or set TELEGRAM_BOT_TOKEN in backend .env).");
+        }
+        if (!chatId) {
+            throw new Error("Telegram Bot node requires a Chat ID.");
+        }
+        if (!messageText) {
+            throw new Error("Telegram Bot node has no message text to send.");
+        }
+
+        const telegramUrl = `https://api.telegram.org/bot${botToken}/sendMessage`;
+        const payload: Record<string, unknown> = {
+            chat_id: chatId,
+            text: messageText,
+        };
+        if (parseMode && parseMode !== "None") {
+            payload["parse_mode"] = parseMode;
+        }
+
+        const res = await fetchWithTimeout(
+            telegramUrl,
+            {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            },
+            15000
+        );
+
+        const text = await res.text();
+        const parsed = safeParseJson(text);
+        if (!res.ok || (parsed && parsed["ok"] === false)) {
+            throw new Error(`Telegram send failed: ${text}`);
+        }
+
+        return {
+            output: {
+                success: true,
+                chatId,
+                messageId: (parsed?.["result"] as Record<string, unknown> | undefined)?.["message_id"],
+                message: messageText,
+            },
+        };
+    }
+
+    if (label === "Notion") {
+        const apiKey = (config["apiKey"] ?? process.env["NOTION_API_KEY"] ?? "").trim();
+        const rawTargetId = interpolateTemplate(config["databaseId"] ?? config["pageId"] ?? "", prevOutput).trim();
+        const title = interpolateTemplate(config["title"] ?? "Workflow Output", prevOutput).trim() || "Workflow Output";
+        const rawContent = config["content"] ?? "";
+        const contentText = rawContent.trim()
+            ? interpolateTemplate(rawContent, prevOutput)
+            : extractReadableText(prevOutput);
+
+        if (!apiKey) {
+            throw new Error("Notion node requires an API key / Integration Secret (or set NOTION_API_KEY in backend .env).");
+        }
+        if (!rawTargetId) {
+            throw new Error("Notion node requires a Database ID or Page ID.");
+        }
+
+        let cleanId = rawTargetId;
+        const urlMatch = rawTargetId.match(/([a-f0-9]{32}|[a-f0-9-]{36})/i);
+        if (urlMatch) {
+            cleanId = urlMatch[1]!;
+        }
+
+        const isDatabase = (config["targetType"] ?? "database") === "database";
+        const parentPayload = isDatabase
+            ? { database_id: cleanId }
+            : { page_id: cleanId };
+
+        const payload: Record<string, unknown> = {
+            parent: parentPayload,
+            properties: {
+                title: [
+                    {
+                        type: "text",
+                        text: { content: title.slice(0, 2000) },
+                    },
+                ],
+            },
+        };
+
+        if (contentText.trim()) {
+            payload["children"] = [
+                {
+                    object: "block",
+                    type: "paragraph",
+                    paragraph: {
+                        rich_text: [
+                            {
+                                type: "text",
+                                text: { content: contentText.slice(0, 2000) },
+                            },
+                        ],
+                    },
+                },
+            ];
+        }
+
+        const res = await fetchWithTimeout(
+            "https://api.notion.com/v1/pages",
+            {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    "Notion-Version": "2022-06-28",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(payload),
+            },
+            20000
+        );
+
+        const text = await res.text();
+        const parsed = safeParseJson(text);
+        if (!res.ok) {
+            throw new Error(`Notion API error (${res.status}): ${text}`);
+        }
+
+        return {
+            output: {
+                success: true,
+                pageId: parsed?.["id"],
+                url: parsed?.["url"],
+                title,
+            },
+        };
+    }
+
+    if (label === "AI Extractor") {
+        const apikey = (config["apikey"] ?? process.env["GEMINI_API_KEY"] ?? process.env["GROQ_API_KEY"] ?? "").trim();
+        const rawProvider = (config["provider"] ?? "").trim().toLowerCase();
+        const rawModel = (config["model"] ?? "").trim();
+        const schemaGoal = interpolateTemplate(
+            config["fields"] ?? "Extract main title, key points (array), summary, and sentiment",
+            prevOutput
+        );
+
+        const rawInput = config["text"] ?? "";
+        const sourceText = rawInput.trim()
+            ? interpolateTemplate(rawInput, prevOutput)
+            : extractReadableText(prevOutput);
+
+        if (!apikey) {
+            throw new Error("AI Extractor node requires an API key.");
+        }
+        if (!sourceText.trim()) {
+            throw new Error("AI Extractor has no input text to process.");
+        }
+
+        const promptInstruction = `Extract the requested data from the provided text into valid JSON with fields: ${schemaGoal}. Respond with ONLY the raw JSON object, no markdown codeblocks, no explanations.`;
+
+        const provider =
+            rawProvider === "groq" || rawProvider === "gemini"
+                ? rawProvider
+                : apikey.startsWith("gsk_")
+                  ? "groq"
+                  : "gemini";
+
+        let responseText = "";
+        if (provider === "groq") {
+            const model = rawModel || "llama-3.3-70b-versatile";
+            const res = await fetchWithTimeout(
+                "https://api.groq.com/openai/v1/chat/completions",
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${apikey}`,
+                    },
+                    body: JSON.stringify({
+                        model,
+                        response_format: { type: "json_object" },
+                        messages: [
+                            { role: "system", content: promptInstruction },
+                            { role: "user", content: sourceText },
+                        ],
+                    }),
+                },
+                30000
+            );
+            const raw = await res.text();
+            if (!res.ok) throw new Error(`Groq error (${res.status}): ${raw}`);
+            const p = JSON.parse(raw) as { choices?: Array<{ message?: { content?: string } }> };
+            responseText = p.choices?.[0]?.message?.content ?? "{}";
+        } else {
+            const model = rawModel || "gemini-2.5-flash";
+            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+            const res = await fetchWithTimeout(
+                geminiUrl,
+                {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": apikey,
+                    },
+                    body: JSON.stringify({
+                        system_instruction: { parts: [{ text: promptInstruction }] },
+                        contents: [{ role: "user", parts: [{ text: sourceText }] }],
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                        },
+                    }),
+                },
+                30000
+            );
+            const raw = await res.text();
+            if (!res.ok) throw new Error(`Gemini error (${res.status}): ${raw}`);
+            const p = JSON.parse(raw) as { candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }> };
+            responseText = p.candidates?.[0]?.content?.parts?.map((x) => x.text ?? "").join("") ?? "{}";
+        }
+
+        let parsedData: unknown = responseText;
+        try {
+            const cleaned = responseText.replace(/```json\s*|```/g, "").trim();
+            parsedData = JSON.parse(cleaned);
+        } catch {
+            // Keep raw if parse fails
+        }
+
+        return {
+            output: {
+                extracted: parsedData,
+                text: typeof parsedData === "string" ? parsedData : JSON.stringify(parsedData, null, 2),
+                display: JSON.stringify(parsedData, null, 2),
+            },
+        };
+    }
+
+    if (label === "Data Extractor") {
+        const extractType = (config["extractType"] ?? "urls").trim();
+        const rawInput = config["input"] ?? "";
+        const sourceText = rawInput.trim()
+            ? interpolateTemplate(rawInput, prevOutput)
+            : extractReadableText(prevOutput);
+
+        let matches: string[] = [];
+        switch (extractType) {
+            case "urls": {
+                const regex = /https?:\/\/[^\s"'<>)\]]+/gi;
+                matches = sourceText.match(regex) || [];
+                break;
+            }
+            case "emails": {
+                const regex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+                matches = sourceText.match(regex) || [];
+                break;
+            }
+            case "numbers": {
+                const regex = /-?\d+(?:\.\d+)?/g;
+                matches = sourceText.match(regex) || [];
+                break;
+            }
+            case "phones": {
+                const regex = /(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
+                matches = sourceText.match(regex) || [];
+                break;
+            }
+            case "regex": {
+                const pattern = config["pattern"] ?? "";
+                if (!pattern) throw new Error("Data Extractor requires a regex pattern.");
+                const flags = config["flags"] ?? "g";
+                const customReg = new RegExp(pattern, flags);
+                matches = sourceText.match(customReg) || [];
+                break;
+            }
+            default:
+                matches = [];
+        }
+
+        const uniqueMatches = Array.from(new Set(matches));
+        return {
+            output: {
+                extractType,
+                count: uniqueMatches.length,
+                matches: uniqueMatches,
+                text: uniqueMatches.join("\n"),
+                display: uniqueMatches.join("\n"),
+            },
+        };
+    }
+
+    if (label === "Code Runner") {
+        const rawCode = config["code"] ?? "return input;";
+        try {
+            const outcome = executeSandboxedCode(rawCode, prevOutput);
+            return {
+                output: {
+                    result: outcome,
+                    display: typeof outcome === "string" ? outcome : JSON.stringify(outcome, null, 2),
+                    text: typeof outcome === "string" ? outcome : JSON.stringify(outcome, null, 2),
+                },
+            };
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            throw new Error(`Code Runner error: ${msg}`);
+        }
+    }
+
+    if (label === "Delay") {
+        const parsedDuration = Number(config["duration"] ?? "1");
+        const duration = Number.isNaN(parsedDuration) || parsedDuration < 0 ? 1 : parsedDuration;
+        const unit = (config["unit"] ?? "seconds").trim().toLowerCase();
+
+        let ms = duration * 1000;
+        if (unit === "milliseconds" || unit === "ms") {
+            ms = duration;
+        } else if (unit === "minutes" || unit === "m") {
+            ms = duration * 60 * 1000;
+        }
+
+        // Cap delay to 5 minutes max for safety
+        const cappedMs = Math.min(ms, 5 * 60 * 1000);
+        await new Promise((resolve) => setTimeout(resolve, cappedMs));
+
+        return {
+            output: {
+                delayedMs: cappedMs,
+                data: prevOutput,
+            },
+        };
+    }
+
     throw new Error(`Unknown node type/label: "${label}"`);
 }
 
@@ -773,14 +1223,11 @@ export async function executeWorkflow(
         throw new Error("Workflow has no nodes to execute.");
     }
 
-    const triggerNodes = nodes.filter((n) => n.type === "trigger");
+    const triggerNodes = nodes.filter((n) => n.type === "trigger" || /manual|schedule|cron/i.test(n.data?.label ?? ""));
     if (triggerNodes.length === 0) {
-        throw new Error("Every workflow must have a Manual Trigger node.");
+        throw new Error("Every workflow must have a Trigger node (e.g. Manual Trigger or Schedule Trigger).");
     }
     const startNode = triggerNodes[0]!;
-    if (!/manual/i.test(startNode.data?.label ?? "")) {
-        throw new Error(`Unsupported trigger "${startNode.data?.label}". Only Manual Trigger is supported.`);
-    }
 
     const nodeMap = new Map<string, WorkflowNode>(nodes.map((n) => [n.id, n]));
     const outgoingEdges = new Map<string, WorkflowEdge[]>();
@@ -809,7 +1256,7 @@ export async function executeWorkflow(
     }
 
     if (reachable.size <= 1) {
-        throw new Error("No edges connected from Manual Trigger. Connect at least one node with an edge to run.");
+        throw new Error("No edges connected from Trigger node. Connect at least one node with an edge to run.");
     }
 
     const remainingIncoming = new Map<string, number>();
@@ -828,7 +1275,7 @@ export async function executeWorkflow(
     }
 
     if ((remainingIncoming.get(startNode.id) ?? 0) > 0) {
-        throw new Error("Cycle detected pointing back into Manual Trigger.");
+        throw new Error("Cycle detected pointing back into the Trigger node.");
     }
 
     // Upfront cycle check across the reachable subgraph so conditional branch skips never look like cycles

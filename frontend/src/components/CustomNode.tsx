@@ -1,5 +1,5 @@
 import { Position, Handle, type NodeProps } from '@xyflow/react';
-import { Play, Loader2, CheckCircle2, XCircle, Clock, MinusCircle } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, XCircle, Clock, MinusCircle, Search, ExternalLink, Send, Database, Sparkles, Filter, Code2, Hourglass } from 'lucide-react';
 import { type NodeExecutionState, type Nodedefine } from '@/lib/node-definitions';
 import { useWorkflowstore } from '@/store';
 
@@ -63,10 +63,13 @@ export function TriggerNode({ data }: NodeProps<Nodedefine>) {
     const runWorkflow = useWorkflowstore((state) => state.runWorkflow);
     const isRunning = useWorkflowstore((state) => state.isRunning);
     const execution = data.execution;
+    const isSchedule = /schedule|cron/i.test(data.label);
+    const cronExpr = data.config?.expression || '0 * * * *';
+    const isEnabled = data.config?.enabled !== 'false';
 
     return (
         <div
-            className={`min-w-[180px] rounded-lg border-2 px-3 py-2 text-sm shadow-sm transition-colors ${getStatusStyles(
+            className={`min-w-[185px] rounded-lg border-2 px-3 py-2 text-sm shadow-sm transition-colors ${getStatusStyles(
                 execution?.status
             )}`}
         >
@@ -74,6 +77,18 @@ export function TriggerNode({ data }: NodeProps<Nodedefine>) {
                 <span className="font-semibold text-slate-900">{data.label}</span>
                 <StatusBadge execution={execution} />
             </div>
+
+            {isSchedule && (
+                <div className="mt-2 flex items-center justify-between rounded bg-slate-100 px-2 py-1 text-[11px] font-mono text-slate-700">
+                    <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3 text-slate-500" />
+                        <span>{cronExpr}</span>
+                    </span>
+                    <span className={`text-[10px] font-sans font-medium ${isEnabled ? 'text-green-700' : 'text-slate-400'}`}>
+                        {isEnabled ? 'Active' : 'Paused'}
+                    </span>
+                </div>
+            )}
 
             <button
                 type="button"
@@ -89,7 +104,7 @@ export function TriggerNode({ data }: NodeProps<Nodedefine>) {
                 ) : (
                     <Play className="h-3.5 w-3.5" />
                 )}
-                {execution?.status === 'executing' ? 'Executing...' : 'Trigger Workflow'}
+                {execution?.status === 'executing' ? 'Executing...' : isSchedule ? 'Run Now' : 'Trigger Workflow'}
             </button>
 
             {execution?.status === 'failed' && execution.error && (
@@ -136,12 +151,23 @@ function getDisplayPreview(
     return { title, text: 'Waiting for workflow output...', isLive: false };
 }
 
-export function OrdinaryNode({ data }: NodeProps<Nodedefine>) {
+export function OrdinaryNode({ id, data }: NodeProps<Nodedefine>) {
     const execution = data.execution;
     const isBooleanBranch = BOOLEAN_BRANCH_NODES.has(data.label);
     const isSwitch = data.label === "Switch";
     const isDisplay = data.label === "Display Output";
+    const isWebSearch = data.label === "Web Search";
+    const updateNodeConfig = useWorkflowstore((state) => state.updateNodeConfig);
     const displayPreview = isDisplay ? getDisplayPreview(data.config, execution) : null;
+
+    const webSearchOutput =
+        isWebSearch && execution?.status === 'success' && execution.output && typeof execution.output === 'object'
+            ? (execution.output as {
+                  query?: string;
+                  count?: number;
+                  sources?: Array<{ url: string; content: string }>;
+              })
+            : null;
 
     return (
         <div
@@ -171,6 +197,153 @@ export function OrdinaryNode({ data }: NodeProps<Nodedefine>) {
                     >
                         {displayPreview.text}
                     </pre>
+                </div>
+            )}
+
+            {isWebSearch && (
+                <div className="nodrag nowheel mt-2 max-w-[280px]">
+                    <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-slate-700">
+                        <span className="flex items-center gap-1">
+                            <Search className="h-3 w-3 text-slate-500" />
+                            <span>Topic to Search</span>
+                        </span>
+                        {webSearchOutput?.sources && (
+                            <span className="text-[10px] font-normal text-slate-500">
+                                {webSearchOutput.sources.length} sources
+                            </span>
+                        )}
+                    </div>
+                    <input
+                        type="text"
+                        placeholder="Enter topic to search..."
+                        value={data.config?.query ?? ""}
+                        onChange={(e) => {
+                            updateNodeConfig(id, { ...(data.config ?? {}), query: e.target.value });
+                        }}
+                        onClick={(e) => e.stopPropagation()}
+                        className="nodrag h-7 w-full rounded border border-slate-300 bg-slate-50 px-2 text-[11px] text-slate-800 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    />
+
+                    {webSearchOutput?.sources && webSearchOutput.sources.length > 0 && (
+                        <div className="mt-2 space-y-1.5">
+                            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                                Fetched Sources & Content
+                            </div>
+                            <div className="max-h-48 space-y-1.5 overflow-y-auto rounded border border-slate-200 bg-slate-50 p-1.5 text-xs">
+                                {webSearchOutput.sources.map((source, idx) => (
+                                    <div
+                                        key={idx}
+                                        className="rounded border border-slate-200 bg-white p-1.5 shadow-xs"
+                                    >
+                                        <a
+                                            href={source.url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="flex items-center gap-1 text-[11px] font-semibold text-blue-600 hover:underline break-all"
+                                        >
+                                            <ExternalLink className="h-3 w-3 shrink-0" />
+                                            <span className="truncate">{source.url}</span>
+                                        </a>
+                                        <p className="mt-1 line-clamp-3 text-[11px] leading-snug text-slate-600 whitespace-pre-wrap break-words">
+                                            {source.content}
+                                        </p>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            )}
+
+            {data.label === "Delay" && (
+                <div className="mt-2 flex items-center gap-1.5 rounded bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 border border-amber-200">
+                    <Hourglass className="h-3 w-3 text-amber-600" />
+                    <span>Delay: {data.config?.duration || '5'} {data.config?.unit || 'seconds'}</span>
+                </div>
+            )}
+
+            {data.label === "Telegram Bot" && (
+                <div className="mt-2 flex items-center gap-1.5 rounded bg-sky-50 px-2 py-1 text-[11px] text-sky-900 border border-sky-200">
+                    <Send className="h-3 w-3 text-sky-600 shrink-0" />
+                    <span className="truncate">Chat: {data.config?.chatId || 'Set chatId'}</span>
+                </div>
+            )}
+
+            {data.label === "Notion" && (
+                <div className="mt-2 flex items-center gap-1.5 rounded bg-slate-100 px-2 py-1 text-[11px] text-slate-800 border border-slate-200">
+                    <Database className="h-3 w-3 text-slate-600 shrink-0" />
+                    <span className="truncate">{data.config?.title || 'Notion Page'}</span>
+                </div>
+            )}
+
+            {data.label === "Code Runner" && (
+                <div className="nodrag nowheel mt-2 max-w-[260px]">
+                    <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                        <Code2 className="h-3 w-3 text-slate-500" />
+                        <span>JavaScript Code</span>
+                    </div>
+                    {execution?.status === 'success' && execution.output !== undefined ? (
+                        <pre className="max-h-28 overflow-auto rounded bg-slate-900 p-2 font-mono text-[10px] text-emerald-300 whitespace-pre-wrap break-words">
+                            {typeof (execution.output as any)?.result === 'object'
+                                ? JSON.stringify((execution.output as any)?.result, null, 2)
+                                : String((execution.output as any)?.result ?? '')}
+                        </pre>
+                    ) : (
+                        <pre className="max-h-20 overflow-hidden rounded border border-slate-200 bg-slate-50 p-1.5 font-mono text-[10px] text-slate-600 line-clamp-3">
+                            {data.config?.code || 'return input;'}
+                        </pre>
+                    )}
+                </div>
+            )}
+
+            {data.label === "AI Extractor" && (
+                <div className="nodrag nowheel mt-2 max-w-[260px]">
+                    <div className="mb-1 flex items-center gap-1 text-[11px] font-semibold text-slate-700">
+                        <Sparkles className="h-3 w-3 text-indigo-500" />
+                        <span>Extracted JSON</span>
+                    </div>
+                    {execution?.status === 'success' && execution.output !== undefined ? (
+                        <pre className="max-h-32 overflow-auto rounded bg-slate-900 p-2 font-mono text-[10px] text-indigo-200 whitespace-pre-wrap break-words">
+                            {typeof (execution.output as any)?.extracted === 'object'
+                                ? JSON.stringify((execution.output as any)?.extracted, null, 2)
+                                : String((execution.output as any)?.extracted ?? '')}
+                        </pre>
+                    ) : (
+                        <p className="text-[10px] text-slate-500 italic truncate">
+                            Fields: {data.config?.fields || 'title, summary, keyPoints'}
+                        </p>
+                    )}
+                </div>
+            )}
+
+            {data.label === "Data Extractor" && (
+                <div className="nodrag nowheel mt-2 max-w-[260px]">
+                    <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-slate-700">
+                        <span className="flex items-center gap-1">
+                            <Filter className="h-3 w-3 text-slate-500" />
+                            <span className="capitalize">{data.config?.extractType || 'URLs'}</span>
+                        </span>
+                        {execution?.status === 'success' && (
+                            <span className="text-[10px] text-slate-500 font-normal">
+                                {(execution.output as any)?.count ?? 0} found
+                            </span>
+                        )}
+                    </div>
+                    {execution?.status === 'success' && Array.isArray((execution.output as any)?.matches) ? (
+                        <div className="max-h-24 overflow-y-auto space-y-1 rounded border border-slate-200 bg-slate-50 p-1.5 text-[10px]">
+                            {((execution.output as any).matches as string[]).slice(0, 8).map((m, i) => (
+                                <div key={i} className="truncate font-mono text-slate-700">{m}</div>
+                            ))}
+                            {((execution.output as any).matches as string[]).length > 8 && (
+                                <div className="text-[9px] text-slate-400">+{((execution.output as any).matches.length - 8)} more</div>
+                            )}
+                        </div>
+                    ) : (
+                        <p className="text-[10px] text-slate-500 italic">
+                            Extracts {data.config?.extractType || 'urls'} from input
+                        </p>
+                    )}
                 </div>
             )}
 
