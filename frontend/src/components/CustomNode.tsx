@@ -1,5 +1,5 @@
 import { Position, Handle, type NodeProps } from '@xyflow/react';
-import { Play, Loader2, CheckCircle2, XCircle, Clock, MinusCircle, Search, ExternalLink, Send, Database, Sparkles, Filter, Code2, Hourglass } from 'lucide-react';
+import { Play, Loader2, CheckCircle2, XCircle, Clock, MinusCircle, Search, ExternalLink, Send, Database, Sparkles, Filter, Code2, Hourglass, Bot } from 'lucide-react';
 import { type NodeExecutionState, type Nodedefine } from '@/lib/node-definitions';
 import { useWorkflowstore } from '@/store';
 
@@ -252,6 +252,31 @@ export function OrdinaryNode({ id, data }: NodeProps<Nodedefine>) {
                                 ))}
                             </div>
                         </div>
+                    )}
+                </div>
+            )}
+
+            {data.label === "AI Chatbot" && (
+                <div className="nodrag nowheel mt-2 max-w-[260px]">
+                    <div className="mb-1 flex items-center justify-between text-[11px] font-semibold text-slate-700">
+                        <span className="flex items-center gap-1">
+                            <Bot className="h-3 w-3 text-purple-600" />
+                            <span>AI Response</span>
+                        </span>
+                        <span className="text-[10px] font-normal text-slate-400 capitalize">
+                            {data.config?.provider || 'gemini'}
+                        </span>
+                    </div>
+                    {execution?.status === 'success' && execution.output !== undefined ? (
+                        <pre className="max-h-36 overflow-auto rounded bg-slate-900 p-2 font-mono text-[10px] text-slate-100 whitespace-pre-wrap break-words">
+                            {typeof execution.output === 'string'
+                                ? execution.output
+                                : (execution.output as any)?.reply ?? JSON.stringify(execution.output, null, 2)}
+                        </pre>
+                    ) : (
+                        <p className="text-[10px] text-slate-500 italic truncate" title={data.config?.prompt}>
+                            {data.config?.prompt ? `Prompt: ${data.config.prompt}` : 'Waiting for workflow run...'}
+                        </p>
                     )}
                 </div>
             )}

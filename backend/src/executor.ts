@@ -128,6 +128,9 @@ function interpolateTemplate(template: string, prevOutput: unknown): string {
             return typeof prevOutput === "string" ? prevOutput : JSON.stringify(prevOutput ?? "");
         }
         const normalizedKey = key.startsWith("prev.") ? key.slice(5) : key;
+        if (typeof prevOutput === "string" && (normalizedKey === "reply" || key === "reply")) {
+            return prevOutput;
+        }
         const val = getNestedValue(prevOutput, normalizedKey);
         if (val === undefined) return "";
         return typeof val === "string" ? val : JSON.stringify(val);
@@ -558,7 +561,7 @@ async function executeNode(
                 choices?: Array<{ message?: { content?: string } }>;
             };
             const reply = parsed.choices?.[0]?.message?.content ?? "";
-            return { output: { provider: "groq", model, reply } };
+            return { output: reply };
         }
 
         const model = rawModel || "gemini-2.5-flash";
@@ -591,7 +594,7 @@ async function executeNode(
             parsed.candidates?.[0]?.content?.parts
                 ?.map((part) => part.text ?? "")
                 .join("") ?? "";
-        return { output: { provider: "gemini", model, reply } };
+        return { output: reply };
     }
 
     if (label === "Send Email") {
@@ -1145,7 +1148,10 @@ async function executeNode(
                 matches = sourceText.match(regex) || [];
                 break;
             }
+          
             case "regex": {
+                //name regex -- [a-z]+(?: [a-z]+)+
+                //flags --- gi
                 const pattern = config["pattern"] ?? "";
                 if (!pattern) throw new Error("Data Extractor requires a regex pattern.");
                 const flags = config["flags"] ?? "g";

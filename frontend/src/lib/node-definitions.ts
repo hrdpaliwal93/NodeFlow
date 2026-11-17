@@ -457,6 +457,7 @@ export const configSchema: Record<string, Record<string, ConfigFieldSchema>> = {
                 { value: "emails", label: "Email Addresses" },
                 { value: "numbers", label: "Numbers & Quantities" },
                 { value: "phones", label: "Phone Numbers" },
+               
                 { value: "regex", label: "Custom Regex Pattern" },
             ],
         },
